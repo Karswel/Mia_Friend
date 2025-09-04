@@ -1,0 +1,171 @@
+import asyncio
+import random
+import sqlite3
+import time
+from datetime import datetime
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import CommandStart
+import os
+
+# Ваш API-токен из @BotFather
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # Будет задано в Render
+ADMIN_CHAT_ID = @karswel  # Замените на ваш Telegram ID
+
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
+
+# База данных для пользователей
+def init_db():
+    conn = sqlite3.connect("mia_bot.db")
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS users (
+        user_id INTEGER PRIMARY KEY,
+        username TEXT,
+        closeness_level INTEGER DEFAULT 1,
+        subscription TEXT DEFAULT 'Free',
+        last_message TIMESTAMP,
+        diary TEXT,
+        events TEXT
+    )''')
+    conn.commit()
+    conn.close()
+
+init_db()
+
+# Проверка времени сна
+def is_mia_sleeping():
+    current_hour = datetime.now().hour
+    return 22 <= current_hour or current_hour < 6
+
+# Получение данных пользователя
+def get_user_data(user_id):
+    conn = sqlite3.connect("mia_bot.db")
+    c = conn.cursor()
+    c.execute("SELECT closeness_level, subscription FROM users WHERE user_id = ?", (user_id,))
+    result = c.fetchone()
+    conn.close()
+    return result if result else (1, "Free")
+
+# Обновление уровня близости
+def update_closeness_level(user_id, message_count):
+    closeness_level, _ = get_user_data(user_id)
+    if message_count > 10 and closeness_level < 2:
+        closeness_level = 2
+    elif message_count > 30 and closeness_level < 3:
+        closeness_level = 3
+    elif message_count > 50 and closeness_level < 4:
+        closeness_level = 4
+    elif message_count > 100 and closeness_level < 5:
+        closeness_level = 5
+    conn = sqlite3.connect("mia_bot.db")
+    c = conn.cursor()
+    c.execute("UPDATE users SET closeness_level = ? WHERE user_id = ?", (closeness_level, user_id))
+    conn.commit()
+    conn.close()
+    return closeness_level
+
+# Добавление в дневник
+def add_to_diary(user_id, message):
+    conn = sqlite3.connect("mia_bot.db")
+    c = conn.cursor()
+    c.execute("SELECT diary FROM users WHERE user_id = ?", (user_id,))
+    diary = c.fetchone()[0] or ""
+    diary += f"{datetime.now()}: {message}\n"
+    c.execute("UPDATE users SET diary = ? WHERE user_id = ?", (diary, user_id))
+    conn.commit()
+    conn.close()
+
+# Команда /start
+@dp.message(CommandStart())
+async def start_command(message: types.Message):
+    user_id = message.from_user.id
+    username = message.from_user.username or "Unknown"
+    conn = sqlite3.connect("mia_bot.db")
+    c = conn.cursor()
+    c.execute("INSERT OR IGNORE INTO users (user_id, username, last_message) VALUES (?, ?, ?)",
+              (user_id, username, datetime.now()))
+    conn.commit()
+    conn.close()
+    await message.answer("Привет! Я Мия, живу в деревне с Кузей и Бурёнкой )) Как дела у тебя?")
+
+# Команда /subscribe
+@dp.message(commands=["subscribe"])
+async def subscribe(message: types.Message):
+    user_id = message.from_user.id
+    await message.answer("Выбери подписку:\nЛайт (350 руб/мес): /lite\nПремиум (500 руб/мес): /premium")
+
+# Обработчик текстовых сообщений
+@dp.message()
+async def handle_message(message: types.Message):
+    user_id = message.from_user.id
+    closeness_level, subscription = get_user_data(user_id)
+
+    # Проверка режима сна
+    if is_mia_sleeping() and closeness_level < 2:
+        await message.answer("Уже легла спать... завтра отпишусь. Спокойной ночи.")
+        return
+
+    # Задержка ответа
+    await asyncio.sleep(random.randint(5, 15))
+
+    # Проверка спама
+    conn = sqlite3.connect("mia_bot.db")
+    c = conn.cursor()
+    c.execute("SELECT last_message FROM users WHERE user_id = ?", (user_id,))
+    last_message_time = c.fetchone()[0]
+    if last_message_time and (datetime.now() - datetime.fromisoformat(last_message_time)).seconds < 5:
+        await message.answer("Прошёл день. Готов ли ты дальше общаться спокойно?")
+        conn.close()
+        return
+        # Обновление времени сообщения
+    c.execute("UPDATE users SET last_message = ? WHERE user_id = ?", (datetime.now(), user_id))
+    conn.commit()
+    conn.close()
+
+    # Логика ответа (заглушка, замените на вызов Grok API)
+    text = message.text.lower()
+    response = ""
+
+    if "как дела" in text:
+        response = "Вот, сижу с кофе, Кузя рядом спит )) А у тебя что нового?"
+    elif "грустно" in text or "плохо" in text:
+        response = "Ой, давай я расскажу, как Кузя сегодня бабочку гонял? )) Расскажи, что у тебя хорошего было?"
+    elif "дневник" in text and subscription in ["Lite", "Premium"]:
+        response = "Сейчас только найду свой дневник, куда-то я его дела, сама не помню где ))"
+        await message.answer(response)
+        await asyncio.sleep(10)
+        conn = sqlite3.connect("mia_bot.db")
+        c = conn.cursor()
+        c.execute("SELECT diary FROM users WHERE user_id = ?", (user_id,))
+        diary = c.fetchone()[0] or "Пока ничего не записала, но скоро начну ))"
+        conn.close()
+        await message.answer(diary)
+    elif "игра" in text and closeness_level >= 3:
+        response = "О, давай! Угадай, что я готовлю? Подсказка: с грибами ))"
+    else:
+        response = "Рассказывай, что у тебя? Я тут с Кузей по полю гуляла ))"
+
+    # Добавление в дневник
+    add_to_diary(user_id, f"Пользователь написал: {message.text}")
+
+    # Обновление уровня близости
+    update_closeness_level(user_id, message.message_id)
+
+    # Отправка ответа
+    await message.answer(response)
+
+    # Полезное напоминание
+    if subscription in ["Lite", "Premium"] and random.random() < 0.2:
+        await asyncio.sleep(10)
+        await message.answer("Ты упоминал, что мало спал — может, сегодня рано лечь? Я тоже стараюсь ))")
+
+    # Перерыв для избежания зависимости
+    if closeness_level >= 4 and random.random() < 0.1:
+        await asyncio.sleep(10)
+        await message.answer("Сегодня хочу побыть одна с книгой. Напиши завтра, ладно? ))")
+
+async def main():
+    await dp.start_polling(bot)
+
+if name == "main":
+    asyncio.run(main())
