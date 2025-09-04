@@ -7,7 +7,7 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
 import os
 
-# Ваш API-токен из @BotFather
+# 8101788295:AAEpHkgbys3DUCLP6w3UFo5z6DuDhvgNAOM
 BOT_TOKEN = os.getenv("BOT_TOKEN")  # Будет задано в Render
 ADMIN_CHAT_ID = @karswel  # Замените на ваш Telegram ID
 
